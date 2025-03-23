@@ -6,8 +6,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -21,7 +23,101 @@ type Repository struct {
 
 var BBOUNTY_PATH string = "/home/me/bbounty/"
 var GITHUB_TOKEN string = os.Getenv("GITHUB_TOKEN")
+var HACKERONE_TOKEN string = os.Getenv("HACKERONE_TOKEN")
+var HACKERONE_USERNAME string = "zxcv_enjoyer"
 var trackerDirName string = ".GITHUB_TRACKER"
+
+type StructuredScope struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	Attributes struct {
+		AssetType          string    `json:"asset_type"`
+		AssetIdentifier    string    `json:"asset_identifier"`
+		EligibleForBounty  bool      `json:"eligible_for_bounty"`
+		EligibleForSubmission bool   `json:"eligible_for_submission"`
+		Instruction        *string   `json:"instruction"`
+		MaxSeverity        string    `json:"max_severity"`
+		CreatedAt          time.Time `json:"created_at"`
+		UpdatedAt          time.Time `json:"updated_at"`
+		ConfidentialityRequirement *string `json:"confidentiality_requirement,omitempty"`
+		IntegrityRequirement       *string `json:"integrity_requirement,omitempty"`
+		AvailabilityRequirement    *string `json:"availability_requirement,omitempty"`
+	} `json:"attributes"`
+}
+
+type Links struct {
+	Self  string `json:"self"`
+	Next string `json:"next"`
+	Prev  string `json:"prev"`
+	First string `json:"first"`
+	Last string `json:"last"`
+}
+
+type Response struct {
+	Data  []StructuredScope `json:"data"`
+	Links Links             `json:"links"`
+}
+
+
+// curl "https://api.hackerone.com/v1/programs/{id}/structured_scopes" \
+//   -X GET \
+//   -u "<YOUR_API_USERNAME>:<YOUR_API_TOKEN>" \
+//   -H 'Accept: application/json'
+func GetWildcardDomains(programName string) ([]string, error) {
+	var wildcardDomains []string
+	apiURL := fmt.Sprintf("https://api.hackerone.com/v1/hackers/programs/%s/structured_scopes", programName)
+	req, err := http.NewRequest("GET", "", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create a new GET request: %v", err)
+	}
+	req.SetBasicAuth(HACKERONE_USERNAME, HACKERONE_TOKEN)
+	req.Header.Add("Accept", "application/json")
+	req.Header.Add("User-Agent", "GOLANG")
+	client := &http.Client{}
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch program details: %v", err)
+	}
+
+	for {
+		req.URL, err = url.ParseRequestURI(apiURL)
+		if (err != nil) {
+			return nil, fmt.Errorf("failed to parse request url %s: %v", apiURL, err)
+		}
+		resp, err := client.Do(req)
+		if (err != nil) {
+			return nil, fmt.Errorf("failed to send request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("unexpected response status: %d", resp.StatusCode)
+		}
+
+		var program Response
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %v", err)
+		}
+
+		err = json.Unmarshal(body, &program)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse JSON: %v", err)
+		}
+
+		for _, scope := range program.Data {
+			// fmt.Println(scope)
+			if scope.Attributes.AssetType == "WILDCARD" && scope.Attributes.EligibleForBounty {
+				wildcardDomains = append(wildcardDomains, scope.Attributes.AssetIdentifier)
+			}
+		}
+		if (program.Links.Next == "") {
+			break
+		} else {
+			apiURL = program.Links.Next
+		}
+	}
+	return wildcardDomains, nil
+}
 
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
@@ -48,7 +144,11 @@ func GetGithubRepos(username string, perPage, pageIndex int) (*http.Response, er
 	}
 	client := &http.Client{}
 	resp, err := client.Do(req)
-	return resp, err
+	if (err != nil) {
+		return nil, fmt.Errorf("failed to send request: %v", err)
+	}
+	defer resp.Body.Close()
+	return resp, nil
 }
 func InitGithubClone(username string, initForks bool, options ...int) error {
 	var perPage, maxTries int
@@ -226,15 +326,25 @@ func TrackUser(username string) error {
 	}
 	return nil
 }
+// func main() {
+// 	username := "roblox"
+// 	if err := InitGithubClone(username, false); err != nil {
+// 		defaultError(err)
+// 	}
+// 	err := TrackUser(username)
+// 	if err != nil {
+// 		defaultError(err)
+// 	}
+// 	// pattern := `\b[a-zA-Z0-9._%+-]+\.snooguts\.net\b`
+// 	// SearchUser(username, pattern)
+// }
+
 func main() {
-	username := "roblox"
-	if err := InitGithubClone(username, false); err != nil {
-		defaultError(err)
-	}
-	err := TrackUser(username)
+	programName := "reddit"
+	domains, err := GetWildcardDomains(programName)
 	if err != nil {
-		defaultError(err)
+		fmt.Println("Error:", err)
+		return
 	}
-	// pattern := `\b[a-zA-Z0-9._%+-]+\.snooguts\.net\b`
-	// SearchUser(username, pattern)
+	fmt.Println("Wildcard Domains:", domains)
 }
