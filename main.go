@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+	"strings"
+	"regexp"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -63,8 +65,8 @@ type Response struct {
 //   -X GET \
 //   -u "<YOUR_API_USERNAME>:<YOUR_API_TOKEN>" \
 //   -H 'Accept: application/json'
-func GetWildcardDomains(programName string) ([]string, error) {
-	var wildcardDomains []string
+func GetWildcards(programName string) ([]string, error) {
+	var wildcards []string
 	apiURL := fmt.Sprintf("https://api.hackerone.com/v1/hackers/programs/%s/structured_scopes", programName)
 	req, err := http.NewRequest("GET", "", nil)
 	if err != nil {
@@ -107,7 +109,7 @@ func GetWildcardDomains(programName string) ([]string, error) {
 		for _, scope := range program.Data {
 			// fmt.Println(scope)
 			if scope.Attributes.AssetType == "WILDCARD" && scope.Attributes.EligibleForBounty {
-				wildcardDomains = append(wildcardDomains, scope.Attributes.AssetIdentifier)
+				wildcards = append(wildcards, scope.Attributes.AssetIdentifier)
 			}
 		}
 		if (program.Links.Next == "") {
@@ -116,9 +118,22 @@ func GetWildcardDomains(programName string) ([]string, error) {
 			apiURL = program.Links.Next
 		}
 	}
-	return wildcardDomains, nil
+	return wildcards, nil
 }
-
+func CreateWildcardsRegexps(wildcards []string) ([]string, error) {
+	// The returned regexps divide the URI into 4 parts
+	// protocol, subdomain, port, directory
+	var regexps []string
+	for _, wildcard := range wildcards {
+		if (wildcard[:2] != "*." || strings.Count(wildcard, "*") != 1) {
+			return nil, fmt.Errorf("non-standard wildcard %v", wildcard)
+		}
+		wildcard = strings.ReplaceAll(pattern, ".", "\.")
+		regexp := fmt.Sprintf("(?:(\S+)://)?((?:[a-zA-Z0-9._%+-]+\\.)?%s)(?::?(\\d+))?(/[/a-zA-Z0-9._%+-]*)?", wildcard[2:])
+		regexps = append(regexps, regexp)
+	}
+	return regexps, nil
+}
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	if err == nil {
@@ -340,11 +355,33 @@ func TrackUser(username string) error {
 // }
 
 func main() {
-	programName := "reddit"
-	domains, err := GetWildcardDomains(programName)
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
+	// programName := "reddit"
+	// domains, err := GetWildcardDomains(programName)
+	// if err != nil {
+		// fmt.Println("Error:", err)
+		// return
+	// }
+	// fmt.Println("Wildcard Domains:", domains)
+	// wildcard := "*.redditinc.com"
+	// pattern := strings.ReplaceAll(wildcard, "*", "[a-zA-Z0-9._%+-]+")
+	// pattern := strings.ReplaceAll(wildcard, ".", "\\.")
+	if (wildcard[:2] != "*." || strings.Count(wildcard, "*") != 1) {
+		return nil, fmt.Errorf("non-standard wildcard %v", wildcard)
 	}
-	fmt.Println("Wildcard Domains:", domains)
+	pattern := "(?:(https?)://)?((?:[a-zA-Z0-9._%+-]+\\.)?redditinc.com)(?::?(\\d+))?(/[/a-zA-Z0-9._%+-]*)?"
+	pattern = strings.ReplaceAll(pattern, "", "")
+	re := regexp.MustCompile(pattern)
+	testStrings := []string{
+		"www.redditinc.com/asdf",
+		"sub.redditinc.com:8000",
+		"redditinc.com",
+		"https://www.redditinc.com:8443/asdf/asdf.php",
+		"otherdomain.com",
+	}
+	for _, test := range testStrings {
+		match := re.FindStringSubmatch(test)
+		if len(match) != 0 {
+		fmt.Printf("Match %s: %v %v\n", test, match, len(match))
+		}
+	}
 }
