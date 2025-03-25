@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,6 +24,51 @@ var GITHUB_TOKEN string = os.Getenv("GITHUB_TOKEN")
 var HACKERONE_TOKEN string = os.Getenv("HACKERONE_TOKEN")
 var HACKERONE_USERNAME string = "zxcv_enjoyer"
 var TRACKER_DIR string = ".GITHUB_STALKER"
+var OUTPUT_DIR string = "output"
+
+// IPv6 is copied from https://vernon.mauery.com/content/2008/04/21/ipv6-regex/
+// IPv4 is copied from https://stackoverflow.com/questions/5284147/validating-ipv4-addresses-with-regexp
+var ipRegexes = []string{
+	`((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}`,
+	`(A([0-9a-f]{1,4}:){1,1}(:[0-9a-f]{1,4}){1,6}Z)|(A([0-9a-f]{1,4}:){1,2}(:[0-9a-f]{1,4}){1,5}Z)|(A([0-9a-f]{1,4}:){1,3}(:[0-9a-f]{1,4}){1,4}Z)|(A([0-9a-f]{1,4}:){1,4}(:[0-9a-f]{1,4}){1,3}Z)|(A([0-9a-f]{1,4}:){1,5}(:[0-9a-f]{1,4}){1,2}Z)|(A([0-9a-f]{1,4}:){1,6}(:[0-9a-f]{1,4}){1,1}Z)|(A(([0-9a-f]{1,4}:){1,7}|:):Z)|(A:(:[0-9a-f]{1,4}){1,7}Z)|(A((([0-9a-f]{1,4}:){6})(25[0-5]|2[0-4]d|[0-1]?d?d)(.(25[0-5]|2[0-4]d|[0-1]?d?d)){3})Z)|(A(([0-9a-f]{1,4}:){5}[0-9a-f]{1,4}:(25[0-5]|2[0-4]d|[0-1]?d?d)(.(25[0-5]|2[0-4]d|[0-1]?d?d)){3})Z)|(A([0-9a-f]{1,4}:){5}:[0-9a-f]{1,4}:(25[0-5]|2[0-4]d|[0-1]?d?d)(.(25[0-5]|2[0-4]d|[0-1]?d?d)){3}Z)|(A([0-9a-f]{1,4}:){1,1}(:[0-9a-f]{1,4}){1,4}:(25[0-5]|2[0-4]d|[0-1]?d?d)(.(25[0-5]|2[0-4]d|[0-1]?d?d)){3}Z)|(A([0-9a-f]{1,4}:){1,2}(:[0-9a-f]{1,4}){1,3}:(25[0-5]|2[0-4]d|[0-1]?d?d)(.(25[0-5]|2[0-4]d|[0-1]?d?d)){3}Z)|(A([0-9a-f]{1,4}:){1,3}(:[0-9a-f]{1,4}){1,2}:(25[0-5]|2[0-4]d|[0-1]?d?d)(.(25[0-5]|2[0-4]d|[0-1]?d?d)){3}Z)|(A([0-9a-f]{1,4}:){1,4}(:[0-9a-f]{1,4}){1,1}:(25[0-5]|2[0-4]d|[0-1]?d?d)(.(25[0-5]|2[0-4]d|[0-1]?d?d)){3}Z)|(A(([0-9a-f]{1,4}:){1,5}|:):(25[0-5]|2[0-4]d|[0-1]?d?d)(.(25[0-5]|2[0-4]d|[0-1]?d?d)){3}Z)|(A:(:[0-9a-f]{1,4}){1,5}:(25[0-5]|2[0-4]d|[0-1]?d?d)(.(25[0-5]|2[0-4]d|[0-1]?d?d)){3}Z)`,
+}
+var secretRegexes = []string{
+	`cloudinary://.*`,
+	`.*firebaseio\.com`,
+	`(xox[p|b|o|a]-[0-9]{12}-[0-9]{12}-[0-9]{12}-[a-z0-9]{32})`,
+	`-----BEGIN RSA PRIVATE KEY-----`,
+	`-----BEGIN DSA PRIVATE KEY-----`,
+	`-----BEGIN EC PRIVATE KEY-----`,
+	`-----BEGIN PGP PRIVATE KEY BLOCK-----`,
+	`AKIA[0-9A-Z]{16}`,
+	`amzn\\.mws\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`,
+	`EAACEdEose0cBA[0-9A-Za-z]+`,
+	`[f|F][a|A][c|C][e|E][b|B][o|O][o|O][k|K].*['|\"][0-9a-f]{32}['|\"]`,
+	`[g|G][i|I][t|T][h|H][u|U][b|B].*['|\"][0-9a-zA-Z]{35,40}['|\"]`,
+	`[a|A][p|P][i|I][_]?[k|K][e|E][y|Y].*['|\"][0-9a-zA-Z]{32,45}['|\"]`,
+	`[s|S][e|E][c|C][r|R][e|E][t|T].*['|\"][0-9a-zA-Z]{32,45}['|\"]`,
+	`AIza[0-9A-Za-z\\-_]{35}`,
+	`[0-9]+-[0-9A-Za-z_]{32}\\.apps\\.googleusercontent\\.com`,
+	`\"type\": \"service_account\"`,
+	`ya29\\.[0-9A-Za-z\\-_]+`,
+	`[h|H][e|E][r|R][o|O][k|K][u|U].*[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}`,
+	`[0-9a-f]{32}-us[0-9]{1,2}`,
+	`key-[0-9a-zA-Z]{32}`,
+	`[a-zA-Z]{3,10}://[^/\\s:@]{3,20}:[^/\\s:@]{3,20}@.{1,100}[\"'\\s]`,
+	`access_token\\$production\\$[0-9a-z]{16}\\$[0-9a-f]{32}`,
+	`sk_live_[0-9a-z]{32}`,
+	`https://hooks.slack.com/services/T[a-zA-Z0-9_]{8}/B[a-zA-Z0-9_]{8}/[a-zA-Z0-9_]{24}`,
+	`sk_live_[0-9a-zA-Z]{24}`,
+	`rk_live_[0-9a-zA-Z]{24}`,
+	`sq0atp-[0-9A-Za-z\\-_]{22}`,
+	`sq0atp-[0-9A-Za-z\\-_]{43}`,
+	`SK[0-9a-fA-F]{32}`,
+	`[t|T][w|W][i|I][t|T][t|T][e|E][r|R].*[1-9][0-9]+-[0-9a-zA-Z]{40}`,
+	`[t|T][w|W][i|I][t|T][t|T][e|E][r|R].*['|\"][0-9a-zA-Z]{35,44}['|\"]`,
+}
+
+// Url regex is originally from https://github.com/validatorjs/validator.js
+var urlRegex string = `(?!mailto:)(?:(?:\w+)://)?(?:\\S+(?::\\S*)?@)?(?:(?:(?:[1-9]\\d?|1\\d\\d|2[01]\\d|22[0-3])(?:\\.(?:1?\\d{1,2}|2[0-4]\\d|25[0-5])){2}(?:\\.(?:[0-9]\\d?|1\\d\\d|2[0-4]\\d|25[0-4]))|(?:(?:[a-z\\u00a1-\\uffff0-9]+-?)*[a-z\\u00a1-\\uffff0-9]+)(?:\\.(?:[a-z\\u00a1-\\uffff0-9]+-?)*[a-z\\u00a1-\\uffff0-9]+)*(?:\\.(?:[a-z\\u00a1-\\uffff]{2,})))|localhost)(?::\\d{2,5})?(?:(/|\\?|#)[^\\s]*)?`
 
 type Repository struct {
 	Name     string `json:"name"`
@@ -117,7 +163,7 @@ func GetWildcards(programName string) ([]string, error) {
 	}
 	return wildcards, nil
 }
-func CreateWildcardsRegexes(wildcards []string) ([]string, error) {
+func CreateWildcardRegexes(wildcards []string) ([]string, error) {
 	// The returned regexs divide the URI into 4 parts
 	// protocol, subdomain, port, directory
 	var regexes []string
@@ -193,7 +239,6 @@ func InitGithubClone(username string, initForks bool, options ...int) error {
 				continue
 			}
 			clonePath := filepath.Join(userDir, repo.Name)
-			fmt.Println(clonePath)
 			if fileExists(clonePath) {
 				continue
 			}
@@ -307,22 +352,29 @@ func GetTrackerPath(user string, repo string) string {
 	return filepath.Join(BBOUNTY_PATH, user, "github", repo, TRACKER_DIR)
 }
 
-func searchGithubRepo(githubUser string, githubRepo string, regexes []string) ([]string, error) {
+func searchGithubRepo(githubUser string, githubRepo string, regexes []string, T int) ([]string, error) {
 	var results []string
 	trackerPath := GetTrackerPath(githubUser, githubRepo)
 	blobs, err := os.ReadDir(trackerPath)
-	fmt.Println(trackerPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read dir %s: %v", trackerPath, err)
 	}
-	var wg sync.WaitGroup
+
+	// Create a buffered channel to limit concurrent goroutines
+	semaphore := make(chan struct{}, T)
 	resultsChan := make(chan []string, len(blobs))
+	var wg sync.WaitGroup
 	var mu sync.Mutex
+
 	for _, blob := range blobs {
 		if !blob.IsDir() {
 			wg.Add(1)
 			go func(blob os.DirEntry) {
 				defer wg.Done()
+				// Acquire a semaphore slot
+				semaphore <- struct{}{}
+				defer func() { <-semaphore }() // Release the slot when done
+
 				filePath := filepath.Join(trackerPath, blob.Name())
 				content, err := os.ReadFile(filePath)
 				if err != nil {
@@ -342,18 +394,20 @@ func searchGithubRepo(githubUser string, githubRepo string, regexes []string) ([
 			}(blob)
 		}
 	}
+
 	go func() {
 		wg.Wait()
 		close(resultsChan)
 	}()
+
 	for matches := range resultsChan {
 		mu.Lock()
 		results = append(results, matches...)
 		mu.Unlock()
 	}
+
 	return results, nil
 }
-
 func TrackUser(username string) error {
 	userDir := GetUserPath(username)
 	gitRepos, err := os.ReadDir(userDir)
@@ -392,6 +446,102 @@ func TrackUser(username string) error {
 	return nil
 }
 
+func GetBlobsUser(username string) ([]string, error) {
+	var blobPaths []string
+	userDir := GetUserPath(username)
+	gitRepos, err := os.ReadDir(userDir)
+	if err != nil {
+		return blobPaths, fmt.Errorf("failed to read dir %s: %v", userDir, err)
+	}
+	for _, gitRepo := range gitRepos {
+		// fmt.Println("Tracking", gitRepo.Name())
+		if gitRepo.IsDir() {
+			continue
+		}
+		blobDir := filepath.Join(userDir, gitRepo.Name(), TRACKER_DIR)
+		blobs, err := os.ReadDir(blobDir)
+		if err != nil {
+			continue
+		}
+		for _, blob := range blobs {
+			blobPaths = append(blobPaths, filepath.Join(blob.Name()))
+		}
+	}
+	return blobPaths, nil
+}
+func writeToFile(filename string, data []string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	for _, line := range data {
+		_, err := writer.WriteString(line + "\n")
+		if err != nil {
+			return err
+		}
+	}
+	return writer.Flush()
+}
+func writeToFileSet(filename string, data map[string]struct{}) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	for line := range data {
+		_, err := writer.WriteString(line + "\n")
+		if err != nil {
+			return err
+		}
+	}
+	return writer.Flush()
+}
+func SearchUser(githubName string, regexes []string) error {
+	userDir := GetUserPath(githubName)
+	repos, _ := os.ReadDir(userDir)
+	var set map[string]struct{}
+	for i, repo := range repos {
+		repoDir := filepath.Join(OUTPUT_DIR, repo.Name())
+		err := os.Mkdir(repoDir, 0777)
+		if err != nil && !os.IsExist(err) {
+			return fmt.Errorf("failed to create a directory: %v", err)
+		}
+		var subdomains []string
+		var dirs []string
+		fmt.Println(i, len(repos), repo.Name())
+		results, _ := searchGithubRepo(githubName, repo.Name(), regexes, 40)
+		set = make(map[string]struct{})
+		for _, result := range results {
+			set[result] = struct{}{}
+		}
+		for key := range set {
+			for _, regex := range regexes {
+				re := regexp.MustCompile(regex)
+				match := re.FindStringSubmatch(key)
+				if len(match) == 0 {
+					continue
+				}
+				subdomains = append(subdomains, match[2])
+				dirs = append(dirs, match[4])
+			}
+		}
+		err = writeToFile(repoDir+"/subdomains.txt", subdomains)
+		if err != nil {
+			log.Fatalf("Failed to write subdomains: %v", err)
+		}
+		err = writeToFile(repoDir+"/dirs.txt", dirs)
+		if err != nil {
+			log.Fatalf("Failed to write subdomains: %v", err)
+		}
+		_ = writeToFileSet(repoDir+"/all.txt", set)
+	}
+	return nil
+}
 func main() {
 	hackeroneName := "reddit"
 	githubName := "reddit"
@@ -399,11 +549,9 @@ func main() {
 	if err != nil {
 		defaultError(err)
 	}
-	regexes, _ := CreateWildcardsRegexes(wildcards)
-	fmt.Println(regexes)
-	results, err := searchGithubRepo(githubName, "devvit", regexes)
+	scopeRegexes, _ := CreateWildcardRegexes(wildcards)
+	err = SearchUser(githubName, scopeRegexes)
 	if err != nil {
 		defaultError(err)
 	}
-	fmt.Println(results)
 }
